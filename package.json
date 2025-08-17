@@ -14,5 +14,8 @@
     "@supabase/ssr": "^0.6.1",
     "@supabase/supabase-js": "^2.55.0",
     "astro": "^5.13.2"
+  },
+  "devDependencies": {
+    "wrangler": "^4.30.0"
   }
 }
