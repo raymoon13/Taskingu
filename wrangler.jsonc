@@ -11,5 +11,8 @@
   },
   "observability": {
     "enabled": true
+  },
+  "vars": {
+    "ENVIRONMENT": "production"
   }
 }

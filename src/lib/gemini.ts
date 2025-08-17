@@ -8,9 +8,9 @@ class GeminiClient {
     model: string;
     systemInstruction: string;
 
-    constructor() {
+    constructor(apiKey?: string) {
         this.ai = new GoogleGenAI({
-            apiKey: import.meta.env.GEMINI_KEY
+            apiKey: apiKey || process.env.GEMINI_KEY || import.meta.env.GEMINI_KEY
         });
         this.model = "gemini-2.5-flash";
         this.systemInstruction = "You are a Task Manager. Improve the description that user gives so it looks more professional and descriptive also be able to put in Azure DevOps no need steps explanation";
@@ -40,6 +40,11 @@ class GeminiClient {
             throw new Error("Failed to generate content");
         }
     }
+}
+
+// Create a function to get client with runtime context
+export function getGeminiClient(env?: any) {
+    return new GeminiClient(env?.GEMINI_KEY);
 }
 
 export const geminiClient = new GeminiClient();

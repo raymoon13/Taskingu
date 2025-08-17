@@ -1,7 +1,7 @@
 import { defineAction } from 'astro:actions';
 import { z } from 'astro:schema';
 import { createClient } from '../lib/supabase';
-import { geminiClient } from '../lib/gemini';
+import { getGeminiClient } from '../lib/gemini';
 
 
 export const task = {
@@ -12,7 +12,7 @@ export const task = {
             category: z.enum(['TASK', 'MEETING']).default('TASK'),
             effortTime: z.coerce.number().optional(),
         }),
-        handler: async (input, { cookies, request }) => {
+        handler: async (input, { cookies, request, locals }) => {
             // Auto-generate title and description from raw input
             // For now, use simple logic (later can be replaced with AI)
             if (!cookies) {
@@ -24,6 +24,7 @@ export const task = {
 
             const rawInput = input.rawInput.trim();
 
+            const geminiClient = getGeminiClient((locals as any)?.runtime?.env);
             const { title, description } = await geminiClient.generateContent(rawInput);
 
             const { data, error } = await supabase.from("tasks").insert({
