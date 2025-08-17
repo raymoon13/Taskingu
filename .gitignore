@@ -24,3 +24,5 @@ pnpm-debug.log*
 .idea/
 
 password = PAUv4ndJYx3xVddk
+
+public/.assetignore
