@@ -13,131 +13,741 @@ const {
 
 if (!user) {
   console.log(user)
-  return Astro.redirect("/signin"); // Add return here
+  return Astro.redirect("/signin");
 }
 
 // Filter tasks by user_id
 const { data: tasks, error: tasksError } = await supabase
   .from("tasks")
   .select("*")
-  .eq("user_id", user.id) // ← THIS IS THE FIX
-  .order("created_at", { ascending: false })
-  .limit(5);
+  .eq("user_id", user.id)
+  .order("created_at", { ascending: false });
 
 if (tasksError) {
   console.error("Error fetching tasks:", tasksError);
 }
+
+// Calculate dashboard statistics
+const now = new Date();
+const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+// Get current week (Monday to Sunday)
+const currentDay = now.getDay();
+const mondayOffset = currentDay === 0 ? -6 : 1 - currentDay; // Sunday = 0, so offset by -6
+const currentWeekStart = new Date(today.getTime() + mondayOffset * 24 * 60 * 60 * 1000);
+const currentWeekEnd = new Date(currentWeekStart.getTime() + 6 * 24 * 60 * 60 * 1000);
+
+// Get all weeks organized by month
+const weeksByMonth = new Map();
+if (tasks && tasks.length > 0) {
+  const taskDates = tasks.map(task => new Date(task.created_at));
+  const earliestDate = new Date(Math.min(...taskDates.map(d => d.getTime())));
+  const latestDate = new Date(Math.max(...taskDates.map(d => d.getTime())));
+  
+  // Start from the Monday of the week containing the earliest task
+  const earliestDay = earliestDate.getDay();
+  const earliestMondayOffset = earliestDay === 0 ? -6 : 1 - earliestDay;
+  const startWeekMonday = new Date(earliestDate.getTime() + earliestMondayOffset * 24 * 60 * 60 * 1000);
+  startWeekMonday.setHours(0, 0, 0, 0);
+  
+  let weekStart = new Date(startWeekMonday);
+  while (weekStart <= latestDate) {
+    const weekEnd = new Date(weekStart.getTime() + 6 * 24 * 60 * 60 * 1000);
+    weekEnd.setHours(23, 59, 59, 999);
+    
+    const weekTasks = tasks.filter(task => {
+      const taskDate = new Date(task.created_at);
+      return taskDate >= weekStart && taskDate <= weekEnd;
+    });
+    
+    if (weekTasks.length > 0) {
+      const monthKey = `${weekStart.getFullYear()}-${String(weekStart.getMonth() + 1).padStart(2, '0')}`;
+      const monthName = weekStart.toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
+      
+      if (!weeksByMonth.has(monthKey)) {
+        weeksByMonth.set(monthKey, {
+          monthName,
+          year: weekStart.getFullYear(),
+          month: weekStart.getMonth() + 1,
+          weeks: []
+        });
+      }
+      
+      // Calculate week number within the month
+      const firstDayOfMonth = new Date(weekStart.getFullYear(), weekStart.getMonth(), 1);
+      const firstMondayOfMonth = new Date(firstDayOfMonth);
+      const firstDayWeekDay = firstDayOfMonth.getDay();
+      const daysToFirstMonday = firstDayWeekDay === 0 ? 1 : 8 - firstDayWeekDay;
+      firstMondayOfMonth.setDate(1 + daysToFirstMonday);
+      
+      let weekNumber = 1;
+      if (weekStart >= firstMondayOfMonth) {
+        weekNumber = Math.floor((weekStart.getTime() - firstMondayOfMonth.getTime()) / (7 * 24 * 60 * 60 * 1000)) + 1;
+      }
+      
+      weeksByMonth.get(monthKey).weeks.push({
+        weekNumber,
+        start: new Date(weekStart),
+        end: new Date(weekEnd),
+        label: `Week ${weekNumber} (${weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${weekEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })})`,
+        tasks: weekTasks.length,
+        hours: weekTasks.reduce((sum, task) => sum + (task.effort_time || 0), 0),
+        completed: weekTasks.filter(task => task.completed_at).length
+      });
+    }
+    
+    weekStart.setDate(weekStart.getDate() + 7);
+  }
+}
+
+// Convert to array and sort by date (most recent first)
+const monthsArray = Array.from(weeksByMonth.values()).sort((a, b) => {
+  return (b.year * 100 + b.month) - (a.year * 100 + a.month);
+});
+
+// Sort weeks within each month
+monthsArray.forEach(month => {
+  month.weeks.sort((a, b) => a.weekNumber - b.weekNumber);
+});
+
+// Find current week from the month structure
+let currentWeekData = { tasks: 0, hours: 0, completed: 0, label: "Current Week" };
+for (const month of monthsArray) {
+  for (const week of month.weeks) {
+    if (currentWeekStart.getTime() === week.start.getTime()) {
+      currentWeekData = week;
+      break;
+    }
+  }
+  if (currentWeekData.tasks > 0 || currentWeekData.hours > 0) break;
+}
+
+const stats = {
+  total: {
+    tasks: tasks?.length || 0,
+    hours: tasks?.reduce((sum, task) => sum + (task.effort_time || 0), 0) || 0,
+    completed: tasks?.filter(task => task.completed_at).length || 0
+  },
+  today: {
+    tasks: tasks?.filter(task => new Date(task.created_at) >= today).length || 0,
+    hours: tasks?.filter(task => new Date(task.created_at) >= today)
+      .reduce((sum, task) => sum + (task.effort_time || 0), 0) || 0,
+    completed: tasks?.filter(task => task.completed_at && new Date(task.completed_at) >= today).length || 0
+  },
+  currentWeek: currentWeekData,
+  monthsArray
+};
 ---
 
 <Layout title="Task Management Dashboard">
-  <h1>{user.email}</h1>
-  <button id="logout-button">logout</button>
-
-  <h2>Add Task</h2>
-
-  <!-- form for adding a Task -->
-  <form id="task-form">
-    <textarea name="rawInput" placeholder="Task Description" required
-    ></textarea>
-
-    <div>
-      <input
-        type="radio"
-        id="category-task"
-        name="category"
-        value="TASK"
-        checked
-        required
-      />
-      <label for="category-task">Task</label>
-
-      <input
-        type="radio"
-        id="category-meeting"
-        name="category"
-        value="MEETING"
-        required
-      />
-      <label for="category-meeting">Meeting</label>
+  <div id="main-content" class="min-h-screen bg-gray-50 transition-all duration-300">
+    <!-- Header -->
+    <div class="bg-white shadow-sm border-b">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex justify-between items-center py-4">
+          <div>
+            <h1 class="text-2xl font-bold text-gray-900">Task Management</h1>
+            <p class="text-sm text-gray-600">{user.email}</p>
+          </div>
+          <button 
+            id="logout-button"
+            class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+          >
+            Logout
+          </button>
+        </div>
+      </div>
     </div>
 
-    <input
-      type="number"
-      name="effortTime"
-      placeholder="Effort Time (hours)"
-      step="0.5"
-      min="0"
-    />
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        
+        <!-- Add Task Form -->
+        <div class="lg:col-span-1">
+          <div class="bg-white shadow rounded-lg p-6">
+            <h2 class="text-lg font-medium text-gray-900 mb-4">Add New Task</h2>
+            
+            <form id="task-form" class="space-y-4">
+              <div>
+                <label for="rawInput" class="block text-sm font-medium text-gray-700 mb-2">
+                  Task Description
+                </label>
+                <textarea 
+                  name="rawInput" 
+                  id="rawInput"
+                  placeholder="Describe your task..."
+                  required
+                  rows="3"
+                  class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                ></textarea>
+              </div>
 
-    <button type="submit" id="task-add-button">Add Task</button>
-  </form>
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Category</label>
+                <div class="flex space-x-4">
+                  <div class="flex items-center">
+                    <input
+                      type="radio"
+                      id="category-task"
+                      name="category"
+                      value="TASK"
+                      checked
+                      required
+                      class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300"
+                    />
+                    <label for="category-task" class="ml-2 text-sm text-gray-700">Task</label>
+                  </div>
+                  <div class="flex items-center">
+                    <input
+                      type="radio"
+                      id="category-meeting"
+                      name="category"
+                      value="MEETING"
+                      required
+                      class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300"
+                    />
+                    <label for="category-meeting" class="ml-2 text-sm text-gray-700">Meeting</label>
+                  </div>
+                </div>
+              </div>
 
-  <!-- Showing All The Tasks -->
-  <h2>Your Tasks</h2>
-  <div id="task-list">
-    {
-      tasks && tasks.length > 0 ? (
-        tasks.map((task) => (
-          <div class="task-item">
-            <h3>{task.title}</h3>
-            {task.description && <p>{task.description}</p>}
-            <p>Raw Input: {task.raw_input}</p>
-            <p>Category: {task.category}</p>
-            {task.effort_time && <p>Effort: {task.effort_time} hours</p>}
-            <p>Created: {new Date(task.created_at).toLocaleDateString()}</p>
+              <div>
+                <label for="effortTime" class="block text-sm font-medium text-gray-700 mb-2">
+                  Effort Time (hours)
+                </label>
+                <input
+                  type="number"
+                  name="effortTime"
+                  id="effortTime"
+                  placeholder="1.5"
+                  step="0.5"
+                  min="0"
+                  class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                />
+              </div>
+
+              <button 
+                type="submit" 
+                id="task-add-button"
+                class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Add Task
+              </button>
+            </form>
           </div>
-        ))
-      ) : (
-        <p>No tasks yet. Create your first task!</p>
-      )
-    }
+
+          <!-- Dashboard Statistics -->
+          <div class="mt-8 bg-white shadow rounded-lg p-6">
+            <div class="flex items-center justify-between mb-6 gap-4">
+              <h2 class="text-lg font-medium text-gray-900 flex-shrink-0">Statistics</h2>
+              <select id="week-selector" class="text-sm border border-gray-300 rounded-md px-3 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 min-w-0 flex-shrink max-w-[200px]">
+                <option value="today">Today</option>
+                <option value="current-week" selected>Current Week</option>
+                {stats.monthsArray.map((month) => 
+                  month.weeks.map((week) => (
+                    <option value={`${month.year}-${String(month.month).padStart(2, '0')}-${week.weekNumber}`}>
+                      {month.monthName} - {week.label}
+                    </option>
+                  ))
+                )}
+                <option value="total">All Time</option>
+              </select>
+            </div>
+            
+            <div id="stats-content">
+              <!-- Statistics Cards -->
+              <div class="flex flex-col space-y-4">
+                <!-- Total Work Time (First) -->
+                <div class="bg-gradient-to-r from-green-500 to-green-600 rounded-lg p-6 text-white">
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <p class="text-green-100 text-sm font-medium">TOTAL WORK TIME</p>
+                      <p class="text-3xl font-bold" id="stat-hours">{stats.currentWeek.hours}h</p>
+                    </div>
+                    <div class="bg-green-400 bg-opacity-30 rounded-full p-3">
+                      <svg class="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Total Tasks (Second) -->
+                <div class="bg-gradient-to-r from-blue-500 to-blue-600 rounded-lg p-6 text-white">
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <p class="text-blue-100 text-sm font-medium">TOTAL TASKS</p>
+                      <p class="text-3xl font-bold" id="stat-tasks">{stats.currentWeek.tasks}</p>
+                    </div>
+                    <div class="bg-blue-400 bg-opacity-30 rounded-full p-3">
+                      <svg class="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                      </svg>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tasks List -->
+        <div class="lg:col-span-2">
+          <div class="bg-white shadow rounded-lg">
+            <div class="px-6 py-4 border-b border-gray-200">
+              <h2 class="text-lg font-medium text-gray-900">Your Tasks</h2>
+            </div>
+            
+            <div id="task-list" class="divide-y divide-gray-200">
+              {
+                tasks && tasks.length > 0 ? (
+                  tasks.map((task) => (
+                    <div class="p-6 task-item" 
+                         data-task-id={task.id}
+                         data-task-title={task.title}
+                         data-task-description={task.description || ""}
+                         data-task-category={task.category}
+                         data-task-effort={task.effort_time || ""}>
+                      <div class="flex items-start justify-between">
+                        <div class="flex-1 min-w-0">
+                          <div class="flex items-center space-x-2 mb-2">
+                            <span class={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                              task.category === 'TASK' ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'
+                            }`}>
+                              {task.category}
+                            </span>
+                            {task.completed_at && (
+                              <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                Completed
+                              </span>
+                            )}
+                          </div>
+                          <h3 class="text-lg font-medium text-gray-900 task-title mb-2">{task.title}</h3>
+                          
+                          {task.description && (
+                            <p class="text-gray-700 mb-2 task-description">{task.description}</p>
+                          )}
+                          
+                          <div class="flex flex-wrap gap-4 text-sm text-gray-500">
+                            <div>Raw: {task.raw_input}</div>
+                            {task.effort_time && <div>Effort: {task.effort_time}h</div>}
+                            <div>Created: {new Date(task.created_at).toLocaleDateString()}</div>
+                          </div>
+                        </div>
+                        
+                        <div class="flex items-center space-x-2 ml-4">
+                          <button 
+                            class={`complete-btn inline-flex items-center p-2 border border-transparent rounded-full shadow-sm text-white focus:outline-none focus:ring-2 focus:ring-offset-2 transition-all ${
+                              task.completed_at 
+                                ? 'bg-red-600 hover:bg-red-700 focus:ring-red-500' 
+                                : 'bg-green-600 hover:bg-green-700 focus:ring-green-500'
+                            }`}
+                            data-task-id={task.id}
+                            data-completed={!!task.completed_at}
+                            title={task.completed_at ? "Mark as incomplete" : "Mark as complete"}
+                          >
+                            {task.completed_at ? (
+                              <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            ) : (
+                              <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                              </svg>
+                            )}
+                          </button>
+                          
+                          <button 
+                            class="edit-btn inline-flex items-center p-2 border border-transparent rounded-full shadow-sm text-white bg-yellow-600 hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500"
+                            data-task-id={task.id}
+                            title="Edit task"
+                          >
+                            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
+                          </button>
+                          
+                          <button 
+                            class="delete-btn inline-flex items-center p-2 border border-transparent rounded-full shadow-sm text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                            data-task-id={task.id}
+                            title="Delete task"
+                          >
+                            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div class="p-12 text-center">
+                    <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                    </svg>
+                    <h3 class="mt-2 text-sm font-medium text-gray-900">No tasks</h3>
+                    <p class="mt-1 text-sm text-gray-500">Get started by creating your first task!</p>
+                  </div>
+                )
+              }
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit Task Modal -->
+  <div id="edit-modal" class="fixed inset-0 z-50 hidden overflow-y-auto" style="z-index: 9999;">
+    <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+      <div id="modal-backdrop" class="fixed inset-0 bg-black bg-opacity-50 backdrop-blur-sm transition-all duration-300" aria-hidden="true"></div>
+      
+      <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+      
+      <div id="modal-content" class="relative inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6" style="z-index: 10000;">
+        <div>
+          <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">Edit Task</h3>
+          
+          <form id="edit-form" class="space-y-4">
+            <input type="hidden" id="edit-task-id" name="id" />
+            
+            <div>
+              <label for="edit-title" class="block text-sm font-medium text-gray-700 mb-2">Title</label>
+              <input
+                type="text"
+                id="edit-title"
+                name="title"
+                required
+                class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+            
+            <div>
+              <label for="edit-description" class="block text-sm font-medium text-gray-700 mb-2">Description</label>
+              <textarea
+                id="edit-description"
+                name="description"
+                rows="3"
+                class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              ></textarea>
+            </div>
+            
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-2">Category</label>
+              <div class="flex space-x-4">
+                <div class="flex items-center">
+                  <input
+                    type="radio"
+                    id="edit-category-task"
+                    name="category"
+                    value="TASK"
+                    class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300"
+                  />
+                  <label for="edit-category-task" class="ml-2 text-sm text-gray-700">Task</label>
+                </div>
+                <div class="flex items-center">
+                  <input
+                    type="radio"
+                    id="edit-category-meeting"
+                    name="category"
+                    value="MEETING"
+                    class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300"
+                  />
+                  <label for="edit-category-meeting" class="ml-2 text-sm text-gray-700">Meeting</label>
+                </div>
+              </div>
+            </div>
+            
+            <div>
+              <label for="edit-effort-time" class="block text-sm font-medium text-gray-700 mb-2">Effort Time (hours)</label>
+              <input
+                type="number"
+                id="edit-effort-time"
+                name="effortTime"
+                step="0.5"
+                min="0"
+                class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+          </form>
+        </div>
+        
+        <div class="mt-5 sm:mt-6 sm:grid sm:grid-cols-2 sm:gap-3 sm:grid-flow-row-dense">
+          <button
+            type="submit"
+            form="edit-form"
+            id="edit-submit-button"
+            class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:col-start-2 sm:text-sm"
+          >
+            Update Task
+          </button>
+          <button
+            type="button"
+            id="cancel-edit"
+            class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:mt-0 sm:col-start-1 sm:text-sm"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </Layout>
 
 <script>
   import { actions } from "astro:actions";
+  
+  // Make actions globally available
+  window.actions = actions;
+</script>
 
-  const taskForm = document.getElementById("task-form") as HTMLFormElement;
-  const taskAddButton = document.getElementById("task-add-button") as HTMLButtonElement;
+<script define:vars={{ statsData: { today: stats.today, currentWeek: stats.currentWeek, total: stats.total, monthsArray: stats.monthsArray } }}>
+
+  // Task creation form
+  const taskForm = document.getElementById("task-form");
+  const taskAddButton = document.getElementById("task-add-button");
   taskForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const formData = new FormData(taskForm);
-    taskAddButton.disabled = true; // Disable button to prevent multiple submissions
-    const response = await actions.task.createTask(formData);
+    taskAddButton.disabled = true;
+    taskAddButton.textContent = "Adding...";
+    
+    const response = await window.actions.task.createTask(formData);
 
     if (response.error) {
       alert(`Error: ${response.error.message}`);
-      taskAddButton.disabled = false; // Re-enable button on error
+      taskAddButton.disabled = false;
+      taskAddButton.textContent = "Add Task";
     } else {
-      alert("Task added successfully!");
+      taskForm.reset();
       window.location.reload();
     }
   });
 
+  // Logout functionality
   const logoutButton = document.getElementById("logout-button");
   logoutButton?.addEventListener("click", async () => {
-
-    console.log("signing out")
-    const response = await actions.auth.signOut();
+    const response = await window.actions.auth.signOut();
 
     if (response.error) {
       alert(`Error: ${response.error.message}`);
     } else {
-      alert("Logged out successfully!");
       window.location.reload();
     }
   });
+
+  // Edit task functionality
+  const editModal = document.getElementById("edit-modal");
+  const editForm = document.getElementById("edit-form");
+  const cancelEditButton = document.getElementById("cancel-edit");
+
+  // Helper function to get task data from element
+  function getTaskDataFromElement(element) {
+    return {
+      id: element.getAttribute("data-task-id"),
+      title: element.getAttribute("data-task-title") || "",
+      description: element.getAttribute("data-task-description") || "",
+      category: element.getAttribute("data-task-category") || "TASK",
+      effort_time: parseFloat(element.getAttribute("data-task-effort") || "0") || null
+    };
+  }
+
+  // Edit button click handlers
+  document.addEventListener("click", async (event) => {
+    const target = event.target;
+    
+    // Handle edit button clicks
+    if (target.closest(".edit-btn")) {
+      const button = target.closest(".edit-btn");
+      const taskItem = button.closest(".task-item");
+      
+      if (taskItem) {
+        const task = getTaskDataFromElement(taskItem);
+        
+        console.log("Editing task:", task);
+        
+        // Populate edit form
+        document.getElementById("edit-task-id").value = task.id || "";
+        document.getElementById("edit-title").value = task.title;
+        document.getElementById("edit-description").value = task.description;
+        document.getElementById("edit-effort-time").value = task.effort_time?.toString() || "";
+        
+        // Set category radio button
+        if (task.category === "TASK") {
+          document.getElementById("edit-category-task").checked = true;
+        } else {
+          document.getElementById("edit-category-meeting").checked = true;
+        }
+        
+        // Show modal with blur effect
+        editModal?.classList.remove("hidden");
+        document.getElementById("main-content")?.classList.add("blur-sm");
+        document.body.style.overflow = "hidden";
+      }
+    }
+    
+    // Handle delete button clicks
+    if (target.closest(".delete-btn")) {
+      const button = target.closest(".delete-btn");
+      const taskId = button.getAttribute("data-task-id");
+      
+      if (confirm("Are you sure you want to delete this task?")) {
+        button.disabled = true;
+        
+        const formData = new FormData();
+        formData.append("id", taskId || "");
+        
+        const response = await window.actions.task.deleteTask(formData);
+        
+        if (response.error) {
+          alert(`Error: ${response.error.message}`);
+          button.disabled = false;
+        } else {
+          window.location.reload();
+        }
+      }
+    }
+    
+    // Handle complete button clicks
+    if (target.closest(".complete-btn")) {
+      const button = target.closest(".complete-btn");
+      const taskId = button.getAttribute("data-task-id");
+      const isCompleted = button.getAttribute("data-completed") === "true";
+      
+      button.disabled = true;
+      
+      const formData = new FormData();
+      formData.append("id", taskId || "");
+      formData.append("completed", (!isCompleted).toString());
+      
+      const response = await window.actions.task.toggleComplete(formData);
+      
+      if (response.error) {
+        alert(`Error: ${response.error.message}`);
+        button.disabled = false;
+      } else {
+        window.location.reload();
+      }
+    }
+  });
+
+  // Edit form submission
+  editForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    
+    const submitButton = document.getElementById("edit-submit-button");
+    
+    if (!submitButton) {
+      console.error("Submit button not found");
+      return;
+    }
+    
+    try {
+      const formData = new FormData(editForm);
+      
+      // Add debug logging
+      console.log("Form data:", Object.fromEntries(formData.entries()));
+      
+      submitButton.disabled = true;
+      submitButton.textContent = "Updating...";
+      
+      const response = await window.actions.task.updateTask(formData);
+      
+      console.log("Update response:", response);
+      
+      if (response.error) {
+        console.error("Update error:", response.error);
+        alert(`Error: ${response.error.message || "Failed to update task"}`);
+        submitButton.disabled = false;
+        submitButton.textContent = "Update Task";
+      } else {
+        console.log("Task updated successfully");
+        closeModal();
+        window.location.reload();
+      }
+    } catch (error) {
+      console.error("Unexpected error:", error);
+      alert("An unexpected error occurred. Please try again.");
+      if (submitButton) {
+        submitButton.disabled = false;
+        submitButton.textContent = "Update Task";
+      }
+    }
+  });
+
+  // Helper function to close modal
+  function closeModal() {
+    editModal?.classList.add("hidden");
+    document.getElementById("main-content")?.classList.remove("blur-sm");
+    document.body.style.overflow = "auto";
+  }
+
+  // Cancel edit
+  cancelEditButton?.addEventListener("click", () => {
+    closeModal();
+  });
+
+  // Close modal when clicking backdrop
+  document.getElementById("modal-backdrop")?.addEventListener("click", () => {
+    closeModal();
+  });
+
+  // Close modal when clicking outside modal content
+  editModal?.addEventListener("click", (event) => {
+    if (event.target === editModal || event.target === document.getElementById("modal-backdrop")) {
+      closeModal();
+    }
+  });
+
+  // Prevent modal from closing when clicking inside modal content
+  document.getElementById("modal-content")?.addEventListener("click", (event) => {
+    event.stopPropagation();
+  });
+
+  // Week selector functionality
+  const weekSelector = document.getElementById("week-selector");
+  weekSelector?.addEventListener("change", (event) => {
+    const selectedValue = event.target.value;
+    let selectedStats;
+    let label;
+
+    if (selectedValue === "today") {
+      selectedStats = statsData.today;
+      label = "Today";
+    } else if (selectedValue === "current-week") {
+      selectedStats = statsData.currentWeek;
+      label = "Current Week";
+    } else if (selectedValue === "total") {
+      selectedStats = statsData.total;
+      label = "All Time";
+    } else {
+      // It's a specific week in format: YYYY-MM-weekNumber
+      const [year, month, weekNumber] = selectedValue.split('-');
+      const monthKey = `${year}-${month}`;
+      const weekNum = parseInt(weekNumber);
+      
+      // Find the specific week in the months array
+      for (const monthData of statsData.monthsArray) {
+        const monthKeyCheck = `${monthData.year}-${String(monthData.month).padStart(2, '0')}`;
+        if (monthKeyCheck === monthKey) {
+          const week = monthData.weeks.find(w => w.weekNumber === weekNum);
+          if (week) {
+            selectedStats = week;
+            label = `${monthData.monthName} - ${week.label}`;
+            break;
+          }
+        }
+      }
+    }
+
+    if (selectedStats) {
+      updateStatsDisplay(selectedStats, label);
+    }
+  });
+
+  function updateStatsDisplay(stats, label) {
+    document.getElementById("stat-hours").textContent = stats.hours + "h";
+    document.getElementById("stat-tasks").textContent = stats.tasks;
+  }
 </script>
 
-<style>
-  .task-item {
-    border: 1px solid #ddd;
-    padding: 1rem;
-    margin-bottom: 1rem;
-    border-radius: 4px;
-  }
-
-  .task-item h3 {
-    margin-top: 0;
-  }
-</style>

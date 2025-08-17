@@ -44,5 +44,111 @@ export const task = {
             }
         }
     }),
+
+    updateTask: defineAction({
+        accept: 'form',
+        input: z.object({
+            id: z.string(),
+            title: z.string().min(1, "Title is required"),
+            description: z.string().optional(),
+            category: z.enum(['TASK', 'MEETING']),
+            effortTime: z.coerce.number().optional(),
+        }),
+        handler: async (input, { cookies, request }) => {
+            if (!cookies) {
+                throw new Error("Unauthorized");
+            }
+
+            const supabase = createClient({ request, cookies });
+            const { data: { user } } = await supabase.auth.getUser();
+
+            if (!user) {
+                throw new Error("User not authenticated");
+            }
+
+            const { data, error } = await supabase
+                .from("tasks")
+                .update({
+                    title: input.title,
+                    description: input.description,
+                    category: input.category,
+                    effort_time: input.effortTime,
+                })
+                .eq('id', input.id)
+                .eq('user_id', user.id)
+                .select();
+
+            if (error) {
+                return { success: false, message: error.message };
+            } else {
+                return { success: true, message: "Task updated successfully" };
+            }
+        }
+    }),
+
+    deleteTask: defineAction({
+        accept: 'form',
+        input: z.object({
+            id: z.string(),
+        }),
+        handler: async (input, { cookies, request }) => {
+            if (!cookies) {
+                throw new Error("Unauthorized");
+            }
+
+            const supabase = createClient({ request, cookies });
+            const { data: { user } } = await supabase.auth.getUser();
+
+            if (!user) {
+                throw new Error("User not authenticated");
+            }
+
+            const { error } = await supabase
+                .from("tasks")
+                .delete()
+                .eq('id', input.id)
+                .eq('user_id', user.id);
+
+            if (error) {
+                return { success: false, message: error.message };
+            } else {
+                return { success: true, message: "Task deleted successfully" };
+            }
+        }
+    }),
+
+    toggleComplete: defineAction({
+        accept: 'form',
+        input: z.object({
+            id: z.string(),
+            completed: z.boolean(),
+        }),
+        handler: async (input, { cookies, request }) => {
+            if (!cookies) {
+                throw new Error("Unauthorized");
+            }
+
+            const supabase = createClient({ request, cookies });
+            const { data: { user } } = await supabase.auth.getUser();
+
+            if (!user) {
+                throw new Error("User not authenticated");
+            }
+
+            const { error } = await supabase
+                .from("tasks")
+                .update({
+                    completed_at: input.completed ? new Date().toISOString() : null,
+                })
+                .eq('id', input.id)
+                .eq('user_id', user.id);
+
+            if (error) {
+                return { success: false, message: error.message };
+            } else {
+                return { success: true, message: input.completed ? "Task completed" : "Task marked as incomplete" };
+            }
+        }
+    }),
     
 }
