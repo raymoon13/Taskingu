@@ -12,7 +12,6 @@ export const server = {
       message: z.string().min(2).max(100),
     }),
     handler: async (input) => {  // Changed from 'resolve' to 'handler'
-      console.log("Testing action:", input);
       return { success: true, message: "Testing action successful!" };
     },
   })

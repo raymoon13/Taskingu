@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@astrojs/cloudflare": "^12.6.4",
+    "@astrojs/netlify": "^6.5.7",
     "@astrojs/node": "^9.4.2",
     "@google/genai": "^1.14.0",
     "@supabase/ssr": "^0.6.1",

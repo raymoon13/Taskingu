@@ -21,7 +21,10 @@ pnpm-debug.log*
 .DS_Store
 
 # jetbrains setting folder
+
 .idea/
+
+*.pem
 
 password = PAUv4ndJYx3xVddk
 
