@@ -1,0 +1,627 @@
+---
+import Layout from "../layouts/Layout.astro";
+import { supabase } from "../lib/supabase";
+
+const accessToken = Astro.cookies.get("sb-access-token");
+const refreshToken = Astro.cookies.get("sb-refresh-token");
+
+if (!accessToken || !refreshToken) {
+  return Astro.redirect("/signin");
+}
+
+let session;
+try {
+  session = await supabase.auth.setSession({
+    refresh_token: refreshToken.value,
+    access_token: accessToken.value,
+  });
+  if (session.error) {
+    Astro.cookies.delete("sb-access-token", {
+      path: "/",
+    });
+    Astro.cookies.delete("sb-refresh-token", {
+      path: "/",
+    });
+    return Astro.redirect("/signin");
+  }
+} catch (error) {
+  Astro.cookies.delete("sb-access-token", {
+    path: "/",
+  });
+  Astro.cookies.delete("sb-refresh-token", {
+    path: "/",
+  });
+  return Astro.redirect("/signin");
+}
+
+const email = session.data.user?.email;
+const userId = session.data.user?.id;
+
+// Fetch user's tasks
+const { data: tasks, error: tasksError } = await supabase
+  .from("tasks")
+  .select("*")
+  .eq("user_id", userId)
+  .order("created_at", { ascending: false });
+
+if (tasksError) {
+  console.error("Error fetching tasks:", tasksError);
+}
+---
+
+<Layout title="Task Management Dashboard">
+  <main>
+    <header
+      style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;"
+    >
+      <div>
+        <h1>Task Management</h1>
+        <p>Welcome, {email}</p>
+      </div>
+      <form action="/api/auth/signout">
+        <button
+          type="submit"
+          style="background: #dc3545; color: white; border: none; padding: 0.5rem 1rem; border-radius: 0.25rem; cursor: pointer;"
+          >Sign out</button
+        >
+      </form>
+    </header>
+
+    <!-- Add New Task Form -->
+    <section
+      style="background: #f8f9fa; padding: 1.5rem; border-radius: 0.5rem; margin-bottom: 2rem;"
+    >
+      <h2>Add New Task</h2>
+      <form id="task-form" style="display: grid; gap: 1rem;">
+        <input name="userId" type="hidden" value={userId} />
+
+        <div>
+          <label
+            for="rawInput"
+            style="display: block; margin-bottom: 0.5rem; font-weight: bold;"
+            >Describe your task:</label
+          >
+          <textarea
+            name="rawInput"
+            id="rawInput"
+            rows="4"
+            required
+            placeholder="e.g., Review the quarterly sales report and prepare a summary for the team meeting..."
+            style="width: 100%; padding: 0.75rem; border: 1px solid #ddd; border-radius: 0.25rem; font-size: 1rem;"
+          ></textarea>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+          <div>
+            <label
+              for="category"
+              style="display: block; margin-bottom: 0.5rem; font-weight: bold;"
+              >Category:</label
+            >
+            <select
+              name="category"
+              id="category"
+              style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 0.25rem;"
+            >
+              <option value="TASK">Task</option>
+              <option value="MEETING">Meeting</option>
+            </select>
+          </div>
+
+          <div>
+            <label
+              for="effortTime"
+              style="display: block; margin-bottom: 0.5rem; font-weight: bold;"
+              >Effort Time (minutes):</label
+            >
+            <input
+              name="effortTime"
+              id="effortTime"
+              type="number"
+              min="1"
+              placeholder="e.g., 30"
+              style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 0.25rem;"
+            />
+          </div>
+        </div>
+
+        <button
+          type="submit"
+          style="background: #007bff; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 0.25rem; cursor: pointer; font-size: 1rem;"
+          >Add Task</button
+        >
+      </form>
+      
+      <p style="margin-top: 1rem; font-size: 0.875rem; color: #666;">
+        💡 The title and description will be automatically generated from your input.
+      </p>
+    </section>
+
+    <!-- Tasks List -->
+    <section>
+      <div
+        style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;"
+      >
+        <h2>Your Tasks</h2>
+        <div>
+          <button id="filter-all" class="filter-btn active" data-filter="all"
+            >All</button
+          >
+          <button id="filter-pending" class="filter-btn" data-filter="pending"
+            >Pending</button
+          >
+          <button
+            id="filter-completed"
+            class="filter-btn"
+            data-filter="completed">Completed</button
+          >
+        </div>
+      </div>
+
+      <div id="tasks-container">
+        {
+          tasks && tasks.length > 0 ? (
+            tasks.map((task) => (
+              <div
+                class="task-card"
+                data-task-id={task.id}
+                data-status={task.completed_at ? "completed" : "pending"}
+              >
+                <div class="task-header">
+                  <h3 class="task-title">{task.title}</h3>
+                  <div class="task-actions">
+                    <button class="edit-btn" data-task-id={task.id}>
+                      Edit
+                    </button>
+                    <button
+                      class="toggle-btn"
+                      data-task-id={task.id}
+                      data-completed={task.completed_at ? "true" : "false"}
+                    >
+                      {task.completed_at ? "Mark Pending" : "Mark Complete"}
+                    </button>
+                    <button class="delete-btn" data-task-id={task.id}>
+                      Delete
+                    </button>
+                  </div>
+                </div>
+
+                {task.description && (
+                  <p class="task-description">{task.description}</p>
+                )}
+
+                <div class="task-meta">
+                  <span class="task-category">{task.category}</span>
+                  {task.effort_time && (
+                    <span class="task-effort">{task.effort_time} min</span>
+                  )}
+                  <span class="task-date">
+                    Created: {new Date(task.created_at).toLocaleDateString()}
+                  </span>
+                  {task.completed_at && (
+                    <span class="task-completed">
+                      Completed:{" "}
+                      {new Date(task.completed_at).toLocaleDateString()}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))
+          ) : (
+            <div class="no-tasks">
+              <p>No tasks yet. Create your first task above!</p>
+            </div>
+          )
+        }
+      </div>
+    </section>
+
+    <!-- Toast Container -->
+    <div id="toast-container"></div>
+  </main>
+
+  <style>
+    .filter-btn {
+      background: #f8f9fa;
+      border: 1px solid #dee2e6;
+      padding: 0.5rem 1rem;
+      margin-left: 0.5rem;
+      border-radius: 0.25rem;
+      cursor: pointer;
+    }
+
+    .filter-btn.active {
+      background: #007bff;
+      color: white;
+      border-color: #007bff;
+    }
+
+    .task-card {
+      background: white;
+      border: 1px solid #dee2e6;
+      border-radius: 0.5rem;
+      padding: 1.5rem;
+      margin-bottom: 1rem;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+
+    .task-card[data-status="completed"] {
+      opacity: 0.7;
+      background: #f8f9fa;
+    }
+
+    .task-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 1rem;
+    }
+
+    .task-title {
+      margin: 0;
+      color: #333;
+    }
+
+    .task-card[data-status="completed"] .task-title {
+      text-decoration: line-through;
+    }
+
+    .task-actions {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .task-actions button {
+      padding: 0.25rem 0.75rem;
+      border: none;
+      border-radius: 0.25rem;
+      cursor: pointer;
+      font-size: 0.875rem;
+    }
+
+    .edit-btn {
+      background: #28a745;
+      color: white;
+    }
+
+    .toggle-btn {
+      background: #ffc107;
+      color: #212529;
+    }
+
+    .delete-btn {
+      background: #dc3545;
+      color: white;
+    }
+
+    .task-description {
+      margin: 0 0 1rem 0;
+      color: #666;
+    }
+
+    .task-meta {
+      display: flex;
+      gap: 1rem;
+      font-size: 0.875rem;
+      color: #666;
+    }
+
+    .task-category {
+      background: #e9ecef;
+      padding: 0.25rem 0.5rem;
+      border-radius: 0.25rem;
+      font-weight: bold;
+    }
+
+    .task-effort {
+      background: #fff3cd;
+      padding: 0.25rem 0.5rem;
+      border-radius: 0.25rem;
+    }
+
+    .no-tasks {
+      text-align: center;
+      padding: 3rem;
+      color: #666;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    /* Toast Styles */
+    #toast-container {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      z-index: 1000;
+      max-width: 350px;
+    }
+
+    .toast {
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      margin-bottom: 10px;
+      padding: 16px;
+      border-left: 4px solid;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      animation: slideIn 0.3s ease-out;
+      transition: all 0.3s ease;
+    }
+
+    .toast.success {
+      border-left-color: #28a745;
+      background: #f8fff9;
+    }
+
+    .toast.error {
+      border-left-color: #dc3545;
+      background: #fff8f8;
+    }
+
+    .toast.info {
+      border-left-color: #007bff;
+      background: #f8f9ff;
+    }
+
+    .toast-icon {
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+
+    .toast.success .toast-icon {
+      color: #28a745;
+    }
+
+    .toast.error .toast-icon {
+      color: #dc3545;
+    }
+
+    .toast.info .toast-icon {
+      color: #007bff;
+    }
+
+    .toast-message {
+      flex: 1;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+
+    .toast-close {
+      background: none;
+      border: none;
+      font-size: 18px;
+      cursor: pointer;
+      color: #666;
+      padding: 0;
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .toast-close:hover {
+      color: #333;
+    }
+
+    @keyframes slideIn {
+      from {
+        transform: translateX(100%);
+        opacity: 0;
+      }
+      to {
+        transform: translateX(0);
+        opacity: 1;
+      }
+    }
+
+    .toast.fadeOut {
+      animation: fadeOut 0.3s ease-out forwards;
+    }
+
+    @keyframes fadeOut {
+      to {
+        opacity: 0;
+        transform: translateX(100%);
+      }
+    }
+  </style>
+</Layout>
+
+<script>
+  import { actions } from "astro:actions";
+
+  const toastContainer = document.getElementById("toast-container") as HTMLDivElement;
+
+  function showToast(message: string, type: 'success' | 'error' | 'info' = 'info') {
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    
+    const icon = type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️';
+    
+    toast.innerHTML = `
+      <div class="toast-icon">${icon}</div>
+      <div class="toast-message">${message}</div>
+      <button class="toast-close" onclick="this.parentElement.remove()">×</button>
+    `;
+    
+    toastContainer.appendChild(toast);
+    
+    // Auto remove after 4 seconds
+    setTimeout(() => {
+      if (toast.parentElement) {
+        toast.classList.add('fadeOut');
+        setTimeout(() => {
+          if (toast.parentElement) {
+            toast.remove();
+          }
+        }, 300);
+      }
+    }, 4000);
+  }
+
+  // Create Task Form
+  const form = document.getElementById("task-form") as HTMLFormElement;
+  form?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const formData = new FormData(form);
+
+    // Convert effortTime to number if provided
+    const effortTimeValue = formData.get("effortTime") as string;
+    if (effortTimeValue && effortTimeValue.trim() !== "") {
+      formData.set("effortTime", effortTimeValue);
+    } else {
+      formData.delete("effortTime");
+    }
+
+    const { data } = await actions.task.createTask(formData);
+
+    if (data?.success) {
+      showToast(data.message, 'success');
+      form.reset();
+      // Reload page to show new task
+      setTimeout(() => window.location.reload(), 5000);
+    } else {
+      showToast(data?.message || "Error creating task", 'error');
+    }
+  });
+
+  // Filter functionality
+  const filterButtons = document.querySelectorAll(".filter-btn");
+  const taskCards = document.querySelectorAll(".task-card");
+
+  filterButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      // Update active button
+      filterButtons.forEach((btn) => btn.classList.remove("active"));
+      button.classList.add("active");
+
+      const filter = button.getAttribute("data-filter");
+
+      taskCards.forEach((card) => {
+        const status = card.getAttribute("data-status");
+        if (filter === "all" || filter === status) {
+          card.classList.remove("hidden");
+        } else {
+          card.classList.add("hidden");
+        }
+      });
+    });
+  });
+
+  // Delete Task
+  document.addEventListener("click", async (event) => {
+    const target = event.target as HTMLElement;
+
+    if (target.classList.contains("delete-btn")) {
+      const taskId = target.getAttribute("data-task-id");
+      if (taskId && confirm("Are you sure you want to delete this task?")) {
+        const formData = new FormData();
+        formData.append("id", taskId);
+
+        const { data } = await actions.task.deleteTask(formData);
+
+        if (data?.success) {
+          showToast(data.message, 'success');
+          // Remove the task card from DOM
+          const taskCard = target.closest(".task-card");
+          taskCard?.remove();
+        } else {
+          showToast(data?.message || "Error deleting task", 'error');
+        }
+      }
+    }
+
+    // Toggle Task Completion
+    if (target.classList.contains("toggle-btn")) {
+      const taskId = target.getAttribute("data-task-id");
+      const isCompleted = target.getAttribute("data-completed") === "true";
+
+      if (taskId) {
+        const taskCard = target.closest(".task-card") as HTMLElement;
+        const title = taskCard.querySelector(".task-title")?.textContent || "";
+        const description =
+          taskCard.querySelector(".task-description")?.textContent || "";
+        const categorySpan = taskCard.querySelector(
+          ".task-category",
+        ) as HTMLElement;
+        const category = categorySpan?.textContent?.toUpperCase() || "TASK";
+
+        // Get effort time from the task meta
+        const effortSpan = taskCard.querySelector(
+          ".task-effort",
+        ) as HTMLElement;
+        let effortTime: number | undefined;
+        if (effortSpan) {
+          const effortText = effortSpan.textContent || "";
+          const effortMatch = effortText.match(/(\d+)/);
+          if (effortMatch) {
+            effortTime = parseInt(effortMatch[1]);
+          }
+        }
+
+        const formData = new FormData();
+        formData.append("id", taskId);
+        formData.append("title", title);
+        formData.append("description", description);
+        formData.append("category", category);
+        if (effortTime) {
+          formData.append("effortTime", effortTime.toString());
+        }
+        formData.append("completed", (!isCompleted).toString());
+
+        const { data } = await actions.task.updateTask(formData);
+
+        if (data?.success) {
+          showToast(data.message, 'success');
+          // Update the UI
+          target.setAttribute("data-completed", (!isCompleted).toString());
+          target.textContent = !isCompleted ? "Mark Pending" : "Mark Complete";
+          taskCard.setAttribute(
+            "data-status",
+            !isCompleted ? "completed" : "pending",
+          );
+
+          // Update completed date in task meta
+          const taskMeta = taskCard.querySelector(".task-meta");
+          const existingCompleted = taskMeta?.querySelector(".task-completed");
+          if (!isCompleted) {
+            // Add completed date
+            if (!existingCompleted) {
+              const completedSpan = document.createElement("span");
+              completedSpan.className = "task-completed";
+              completedSpan.textContent = `Completed: ${new Date().toLocaleDateString()}`;
+              taskMeta?.appendChild(completedSpan);
+            }
+          } else {
+            // Remove completed date
+            existingCompleted?.remove();
+          }
+        } else {
+          showToast(data?.message || "Error updating task", 'error');
+        }
+      }
+    }
+
+    // Edit Task - For now, just show alert since we only have raw input and need to maintain the simple form
+    if (target.classList.contains("edit-btn")) {
+      const taskId = target.getAttribute("data-task-id");
+      if (taskId) {
+        // For simplicity, we'll disable inline editing since we only collect raw input
+        // and the title/description are auto-generated
+        alert("Edit functionality: Please delete this task and create a new one with updated information. Full edit functionality will be available when AI integration is added.");
+        return;
+        
+        // TODO: When AI is integrated, we can:
+        // 1. Get the raw_input from the database
+        // 2. Pre-fill the form with the raw input
+        // 3. Allow user to edit the raw input
+        // 4. Re-generate title/description with AI on update
+      }
+    }
+  });
+</script>
