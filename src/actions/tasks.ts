@@ -1,7 +1,7 @@
 import { defineAction } from 'astro:actions';
 import { z } from 'astro:schema';
 import { createClient } from '../lib/supabase';
-import { getGeminiClient } from '../lib/gemini';
+import {  geminiClient } from '../lib/gemini';
 
 
 export const task = {
@@ -24,7 +24,6 @@ export const task = {
 
             const rawInput = input.rawInput.trim();
 
-            const geminiClient = getGeminiClient((locals as any)?.runtime?.env);
             const { title, description } = await geminiClient.generateContent(rawInput);
 
             const { data, error } = await supabase.from("tasks").insert({
